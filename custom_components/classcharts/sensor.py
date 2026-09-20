@@ -59,43 +59,67 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
         }
         self._attr_icon = "mdi:book-education"
 
-    @property
-    def native_value(self):
-        """Calculates current or next lesson based on today's timetable schedule."""
+    def _get_target_lesson(self):
+        """Helper to find current or next lesson, scanning ahead across days if needed."""
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
-            return "Unknown"
+            return None
 
         timetable = self.coordinator.data.get("timetable", {})
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        lessons = timetable.get(today_str, [])
+        if not timetable:
+            return None
 
-        if not lessons or not isinstance(lessons, list):
-            return "No Lessons"
+        now = datetime.now()
+        current_time = now.time()
+        today_str = now.strftime("%Y-%m-%d")
 
-        current_time = datetime.now().time()
-        current_lesson = None
-        next_lesson = None
-
-        for lesson in lessons:
-            try:
-                start_str = lesson.get("start_time") or lesson.get("start")
-                end_str = lesson.get("end_time") or lesson.get("end")
-
-                if not start_str or not end_str:
+        # For current lesson, we only care about today
+        if self._lesson_type == "current":
+            lessons = timetable.get(today_str, [])
+            for lesson in lessons:
+                try:
+                    start_str = lesson.get("start_time") or lesson.get("start")
+                    end_str = lesson.get("end_time") or lesson.get("end")
+                    if not start_str or not end_str:
+                        continue
+                    start_time = datetime.strptime(start_str[:5], "%H:%M").time()
+                    end_time = datetime.strptime(end_str[:5], "%H:%M").time()
+                    if start_time <= current_time <= end_time:
+                        return lesson
+                except (ValueError, TypeError):
                     continue
+            return None
 
-                start_time = datetime.strptime(start_str[:5], "%H:%M").time()
-                end_time = datetime.strptime(end_str[:5], "%H:%M").time()
-
-                if start_time <= current_time <= end_time:
-                    current_lesson = lesson
-                elif start_time > current_time and next_lesson is None:
-                    next_lesson = lesson
-            except (ValueError, TypeError):
+        # For next lesson, scan ahead through sorted dates (today, tomorrow, next week, etc.)
+        sorted_dates = sorted(timetable.keys())
+        for date_str in sorted_dates:
+            lessons = timetable.get(date_str, [])
+            if not lessons or not isinstance(lessons, list):
                 continue
 
-        target_lesson = current_lesson if self._lesson_type == "current" else next_lesson
+            for lesson in lessons:
+                try:
+                    start_str = lesson.get("start_time") or lesson.get("start")
+                    end_str = lesson.get("end_time") or lesson.get("end")
+                    if not start_str or not end_str:
+                        continue
 
+                    start_time = datetime.strptime(start_str[:5], "%H:%M").time()
+
+                    # If scanning today, only pick lessons that haven't started yet
+                    if date_str == today_str:
+                        if start_time > current_time:
+                            return lesson
+                    # If scanning a future date, take the very first valid lesson of that day
+                    elif date_str > today_str:
+                        return lesson
+                except (ValueError, TypeError):
+                    continue
+
+        return None
+
+    @property
+    def native_value(self):
+        target_lesson = self._get_target_lesson()
         if not target_lesson:
             return "None"
 
@@ -108,41 +132,7 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Expose teacher, room, and timings as extra attributes."""
-        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
-            return {}
-
-        timetable = self.coordinator.data.get("timetable", {})
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        lessons = timetable.get(today_str, [])
-
-        if not lessons or not isinstance(lessons, list):
-            return {}
-
-        current_time = datetime.now().time()
-        current_lesson = None
-        next_lesson = None
-
-        for lesson in lessons:
-            try:
-                start_str = lesson.get("start_time") or lesson.get("start")
-                end_str = lesson.get("end_time") or lesson.get("end")
-
-                if not start_str or not end_str:
-                    continue
-
-                start_time = datetime.strptime(start_str[:5], "%H:%M").time()
-                end_time = datetime.strptime(end_str[:5], "%H:%M").time()
-
-                if start_time <= current_time <= end_time:
-                    current_lesson = lesson
-                elif start_time > current_time and next_lesson is None:
-                    next_lesson = lesson
-            except (ValueError, TypeError):
-                continue
-
-        target_lesson = current_lesson if self._lesson_type == "current" else next_lesson
-
+        target_lesson = self._get_target_lesson()
         if not target_lesson:
             return {}
 
