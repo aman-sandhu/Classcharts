@@ -54,14 +54,17 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
             
             description_snippet = (clean_text[:147] + "...") if len(clean_text) > 150 else clean_text
 
-            # Helper function to convert YYYY-MM-DD to DD/MM/YYYY
+            # Safe helper function to convert YYYY-MM-DD to DD/MM/YYYY
             def format_date(date_str):
                 if not date_str:
-                    return None
+                    return "N/A"
                 try:
-                    return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+                    date_string = str(date_str)
+                    if len(date_string) >= 10:
+                        return datetime.strptime(date_string[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+                    return date_string
                 except (ValueError, TypeError):
-                    return date_str  # Fallback to original string if format is unexpected
+                    return date_string
 
             cleaned_list.append({
                 "id": item.get("id"),
