@@ -47,20 +47,112 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, entry, type):
+    def __init__(self, coordinator, entry, lesson_type):
         super().__init__(coordinator)
-        self._type = type
+        self._lesson_type = lesson_type
         student_label = entry.data.get("student_name") or entry.data.get("pupil_id")
-        self._attr_name = f"{type.capitalize()} Lesson"
-        self._attr_unique_id = f"{entry.entry_id}_lesson_{type}"
+        self._attr_name = f"{lesson_type.capitalize()} Lesson"
+        self._attr_unique_id = f"{entry.entry_id}_lesson_{lesson_type}"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)}, 
             "name": f"Class Charts ({student_label})"
         }
+        self._attr_icon = "mdi:book-education"
 
     @property
     def native_value(self):
-        return "Unknown"
+        """Calculates current or next lesson based on today's timetable schedule."""
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
+            return "Unknown"
+
+        timetable = self.coordinator.data.get("timetable", {})
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        lessons = timetable.get(today_str, [])
+
+        if not lessons or not isinstance(lessons, list):
+            return "No Lessons"
+
+        current_time = datetime.now().time()
+        current_lesson = None
+        next_lesson = None
+
+        for lesson in lessons:
+            try:
+                start_str = lesson.get("start_time") or lesson.get("start")
+                end_str = lesson.get("end_time") or lesson.get("end")
+
+                if not start_str or not end_str:
+                    continue
+
+                start_time = datetime.strptime(start_str[:5], "%H:%M").time()
+                end_time = datetime.strptime(end_str[:5], "%H:%M").time()
+
+                if start_time <= current_time <= end_time:
+                    current_lesson = lesson
+                elif start_time > current_time and next_lesson is None:
+                    next_lesson = lesson
+            except (ValueError, TypeError):
+                continue
+
+        target_lesson = current_lesson if self._lesson_type == "current" else next_lesson
+
+        if not target_lesson:
+            return "None"
+
+        return (
+            target_lesson.get("subject_name") 
+            or target_lesson.get("name") 
+            or target_lesson.get("lesson_name") 
+            or "Unknown Lesson"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose teacher, room, and timings as extra attributes."""
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
+            return {}
+
+        timetable = self.coordinator.data.get("timetable", {})
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        lessons = timetable.get(today_str, [])
+
+        if not lessons or not isinstance(lessons, list):
+            return {}
+
+        current_time = datetime.now().time()
+        current_lesson = None
+        next_lesson = None
+
+        for lesson in lessons:
+            try:
+                start_str = lesson.get("start_time") or lesson.get("start")
+                end_str = lesson.get("end_time") or lesson.get("end")
+
+                if not start_str or not end_str:
+                    continue
+
+                start_time = datetime.strptime(start_str[:5], "%H:%M").time()
+                end_time = datetime.strptime(end_str[:5], "%H:%M").time()
+
+                if start_time <= current_time <= end_time:
+                    current_lesson = lesson
+                elif start_time > current_time and next_lesson is None:
+                    next_lesson = lesson
+            except (ValueError, TypeError):
+                continue
+
+        target_lesson = current_lesson if self._lesson_type == "current" else next_lesson
+
+        if not target_lesson:
+            return {}
+
+        return {
+            "teacher": target_lesson.get("teacher_name") or target_lesson.get("teacher"),
+            "room": target_lesson.get("room_name") or target_lesson.get("room"),
+            "start_time": target_lesson.get("start_time") or target_lesson.get("start"),
+            "end_time": target_lesson.get("end_time") or target_lesson.get("end"),
+            "subject": target_lesson.get("subject_name") or target_lesson.get("name"),
+        }
 
 class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
