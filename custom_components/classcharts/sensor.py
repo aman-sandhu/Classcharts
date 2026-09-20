@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from datetime import datetime, date
+from datetime import datetime
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -42,7 +42,6 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
         hw = self.coordinator.data.get("homework", {})
         raw_list = hw.get("data", [])
 
-        # Truncate the list to the 15 most recent/relevant tasks to keep payload safe.
         return {"homework_list": raw_list[:15]}
 
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
@@ -79,7 +78,6 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         self._attr_native_unit_of_measurement = "pts"
         self._attr_state_class = "measurement"
 
-        # Dynamically set icons based on the type
         if sensor_type == "positive":
             self._attr_icon = "mdi:thumb-up"
         elif sensor_type == "negative":
@@ -89,30 +87,15 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Calculates values for the current academic year (starting Sept 1st)."""
+        """Sums values from the pre-scoped academic year timeline payload."""
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
             return 0
 
         data = self.coordinator.data.get("behaviour_data", {}).get("data", {})
         timeline = data.get("timeline", [])
         
-        # Calculate UK Academic Year start (September 1st)
-        now = date.today()
-        academic_year_start = date(now.year if now.month >= 9 else now.year - 1, 9, 1)
-        
-        total_pos = 0
-        total_neg = 0
-        
-        for item in timeline:
-            item_date_str = item.get("date")
-            if item_date_str:
-                try:
-                    item_date = datetime.strptime(item_date_str.split("T")[0], "%Y-%m-%d").date()
-                    if item_date >= academic_year_start:
-                        total_pos += item.get("positive", 0)
-                        total_neg += item.get("negative", 0)
-                except (ValueError, TypeError):
-                    pass
+        total_pos = sum(item.get("positive", 0) for item in timeline)
+        total_neg = sum(item.get("negative", 0) for item in timeline)
         
         if self._sensor_type == "balance":
             return (total_pos - total_neg)
@@ -129,7 +112,7 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
             return {}
 
-        activity_list = self.coordinator.data.get("activity_data", {}).get("data", [])
+        activity_list = self.coordinator.data.get("activity_data", {}).get("data", {})
         behaviour_data = self.coordinator.data.get("behaviour_data", {}).get("data", {})
 
         recent_log = [
