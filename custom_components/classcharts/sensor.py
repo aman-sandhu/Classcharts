@@ -33,7 +33,6 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         """Only store outstanding homework array and cap it to prevent DB bloat."""
-        # FIX 1: Only attach the heavy data array to the Outstanding sensor entity
         if self._key != "this_week_outstanding_count":
             return {}
 
@@ -43,8 +42,7 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
         hw = self.coordinator.data.get("homework", {})
         raw_list = hw.get("data", [])
 
-        # FIX 2: Truncate the list to the 15 most recent/relevant tasks.
-        # This keeps the payload safely under the 16KB recorder threshold.
+        # Truncate the list to the 15 most recent/relevant tasks to keep payload safe.
         return {"homework_list": raw_list[:15]}
 
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
@@ -91,15 +89,30 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Calculates values based on the /behaviour endpoint data structures."""
+        """Calculates values for the current academic year (starting Sept 1st)."""
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
             return 0
 
         data = self.coordinator.data.get("behaviour_data", {}).get("data", {})
         timeline = data.get("timeline", [])
         
-        total_pos = sum(item.get("positive", 0) for item in timeline)
-        total_neg = sum(item.get("negative", 0) for item in timeline)
+        # Calculate UK Academic Year start (September 1st)
+        now = date.today()
+        academic_year_start = date(now.year if now.month >= 9 else now.year - 1, 9, 1)
+        
+        total_pos = 0
+        total_neg = 0
+        
+        for item in timeline:
+            item_date_str = item.get("date")
+            if item_date_str:
+                try:
+                    item_date = datetime.strptime(item_date_str.split("T")[0], "%Y-%m-%d").date()
+                    if item_date >= academic_year_start:
+                        total_pos += item.get("positive", 0)
+                        total_neg += item.get("negative", 0)
+                except (ValueError, TypeError):
+                    pass
         
         if self._sensor_type == "balance":
             return (total_pos - total_neg)
@@ -108,7 +121,7 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         elif self._sensor_type == "negative":
             return total_neg
         else:
-            return total_pos # fallback breakdown default
+            return total_pos
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -119,7 +132,6 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         activity_list = self.coordinator.data.get("activity_data", {}).get("data", [])
         behaviour_data = self.coordinator.data.get("behaviour_data", {}).get("data", {})
 
-        # Create a list of the 5 most recent events
         recent_log = [
             {
                 "reason": item.get("reason"),
