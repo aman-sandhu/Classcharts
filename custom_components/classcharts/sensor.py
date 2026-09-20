@@ -121,7 +121,7 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         target_lesson = self._get_target_lesson()
         if not target_lesson:
-            return "None"
+            return "No Lessons"
 
         return (
             target_lesson.get("subject_name") 
