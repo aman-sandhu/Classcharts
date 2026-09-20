@@ -121,20 +121,32 @@ Use a **Markdown Card** to display your assignments beautifully:
 
 ```jinja2
 ## 📝 Outstanding Homework
-{% set items = state_attr('sensor.class_charts_[student_name]_outstanding_homework', 'homework_list') %}
-{% if items %}
-  {% for hw in items %}
-  **{{ hw.title }}** ({{ hw.subject }})
-  *Due: {{ hw.due_date }}*
-  ***
-  {% endfor %}
-{% else %}
-  All caught up! 🎉
-{% endif %}
+{% set items = state_attr('sensor.class_charts_alice_browne_outstanding_homework', 'homework_list') or [] %}
+{% set today = today_at("00:00").replace(tzinfo=None) %}
+{% set next_week = today + timedelta(days=14) %}
+{% set active_homework = namespace(count=0) %}
 
-<p style="text-align: center; color: #555; font-size: 0.8em;">
-  Last checked: {{ now().strftime('%H:%M') }}
-</p>
+### Homework Due This Week
+
+{% if items | length == 0 %}
+✅ No homework found!
+{% else %}
+  {% for item in items %}
+    {# Use the clean YYYY-MM-DD key for python math #}
+    {% set due_date = as_datetime(item.due_date).replace(tzinfo=None) %}
+    
+    {% if due_date >= today and due_date <= next_week %}
+      {% set active_homework.count = active_homework.count + 1 %}
+**{{ item.subject }}** -  {{ item.title }}
+Due: {{ item.due_date_formatted }}
+
+    {% endif %}
+  {% endfor %}
+
+  {% if active_homework.count == 0 %}
+✅ All caught up for the next 7 days!
+  {% endif %}
+{% endif %}
 ```
 ---
 ## ⚖️ Disclaimer
