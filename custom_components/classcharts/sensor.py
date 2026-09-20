@@ -1,6 +1,8 @@
 from __future__ import annotations
 import logging
 from datetime import datetime
+import re
+from html import unescape
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -32,7 +34,7 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
         
     @property
     def extra_state_attributes(self):
-        """Only store outstanding homework array and cap it to prevent DB bloat."""
+        """Clean and trim homework list attributes with a short text snippet."""
         if self._key != "this_week_outstanding_count":
             return {}
 
@@ -42,7 +44,33 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
         hw = self.coordinator.data.get("homework", {})
         raw_list = hw.get("data", [])
 
-        return {"homework_list": raw_list[:15]}
+        cleaned_list = []
+        for item in raw_list[:15]:
+            # Clean HTML tags and entities to make a readable preview snippet
+            raw_desc = item.get("description", "") or ""
+            clean_text = re.sub('<[^<]+?>', '', raw_desc)
+            clean_text = unescape(clean_text).strip()
+            # Collapse multiple spaces/newlines into a single space
+            clean_text = re.sub(r'\s+', ' ', clean_text)
+            
+            # Truncate to 150 characters for a neat snippet
+            if len(clean_text) > 150:
+                description_snippet = clean_text[:147] + "..."
+            else:
+                description_snippet = clean_text
+
+            cleaned_list.append({
+                "id": item.get("id"),
+                "subject": item.get("subject"),
+                "title": item.get("title"),
+                "teacher": item.get("teacher"),
+                "homework_type": item.get("homework_type"),
+                "issue_date": item.get("issue_date"),
+                "due_date": item.get("due_date"),
+                "description_snippet": description_snippet,
+            })
+
+        return {"homework_list": cleaned_list}
 
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
