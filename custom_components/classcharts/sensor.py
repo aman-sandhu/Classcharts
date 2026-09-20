@@ -46,18 +46,22 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
 
         cleaned_list = []
         for item in raw_list[:15]:
-            # Clean HTML tags and entities to make a readable preview snippet
+            # Clean HTML tags and entities for the description snippet
             raw_desc = item.get("description", "") or ""
             clean_text = re.sub('<[^<]+?>', '', raw_desc)
             clean_text = unescape(clean_text).strip()
-            # Collapse multiple spaces/newlines into a single space
             clean_text = re.sub(r'\s+', ' ', clean_text)
             
-            # Truncate to 150 characters for a neat snippet
-            if len(clean_text) > 150:
-                description_snippet = clean_text[:147] + "..."
-            else:
-                description_snippet = clean_text
+            description_snippet = (clean_text[:147] + "...") if len(clean_text) > 150 else clean_text
+
+            # Helper function to convert YYYY-MM-DD to DD/MM/YYYY
+            def format_date(date_str):
+                if not date_str:
+                    return None
+                try:
+                    return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+                except (ValueError, TypeError):
+                    return date_str  # Fallback to original string if format is unexpected
 
             cleaned_list.append({
                 "id": item.get("id"),
@@ -65,8 +69,8 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
                 "title": item.get("title"),
                 "teacher": item.get("teacher"),
                 "homework_type": item.get("homework_type"),
-                "issue_date": item.get("issue_date"),
-                "due_date": item.get("due_date"),
+                "issue_date": format_date(item.get("issue_date")),
+                "due_date": format_date(item.get("due_date")),
                 "description_snippet": description_snippet,
             })
 
