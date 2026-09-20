@@ -46,7 +46,6 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
 
         cleaned_list = []
         for item in raw_list[:15]:
-            # Clean HTML tags and entities for the description snippet
             raw_desc = item.get("description", "") or ""
             clean_text = re.sub('<[^<]+?>', '', raw_desc)
             clean_text = unescape(clean_text).strip()
@@ -54,17 +53,22 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
             
             description_snippet = (clean_text[:147] + "...") if len(clean_text) > 150 else clean_text
 
-            # Safe helper function to convert YYYY-MM-DD to DD/MM/YYYY
+            raw_due = item.get("due_date", "") or ""
+            raw_issue = item.get("issue_date", "") or ""
+
+            # Format helpers
             def format_date(date_str):
-                if not date_str:
-                    return "N/A"
                 try:
-                    date_string = str(date_str)
-                    if len(date_string) >= 10:
-                        return datetime.strptime(date_string[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
-                    return date_string
+                    ds = str(date_str)
+                    if len(ds) >= 10:
+                        dt = datetime.strptime(ds[:10], "%Y-%m-%d")
+                        return dt.strftime("%Y-%m-%d"), dt.strftime("%d/%m/%Y")
                 except (ValueError, TypeError):
-                    return date_string
+                    pass
+                return date_str, date_str
+
+            due_iso, due_disp = format_date(raw_due)
+            issue_iso, issue_disp = format_date(raw_issue)
 
             cleaned_list.append({
                 "id": item.get("id"),
@@ -72,13 +76,14 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
                 "title": item.get("title"),
                 "teacher": item.get("teacher"),
                 "homework_type": item.get("homework_type"),
-                "issue_date": format_date(item.get("issue_date")),
-                "due_date": format_date(item.get("due_date")),
+                "issue_date": issue_iso,
+                "issue_date_formatted": issue_disp,
+                "due_date": due_iso,               # YYYY-MM-DD for your Jinja math
+                "due_date_formatted": due_disp,     # DD/MM/YYYY for display
                 "description_snippet": description_snippet,
             })
 
         return {"homework_list": cleaned_list}
-
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
