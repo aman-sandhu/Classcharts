@@ -102,12 +102,13 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = "mdi:book-education"
 
     def _get_target_lesson(self):
-        """Helper to find current or next lesson, scanning ahead across days if needed."""
+        """Helper to find current or next lesson with key fallbacks and debug logging."""
         if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
             return None
 
         timetable = self.coordinator.data.get("timetable", {})
         if not timetable:
+            _LOGGER.debug("ClassCharts Timetable: Timetable dictionary is empty or missing.")
             return None
 
         now = datetime.now()
@@ -119,17 +120,47 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
             lessons = timetable.get(today_str, [])
             for lesson in lessons:
                 try:
-                    start_str = lesson.get("start_time") or lesson.get("start")
-                    end_str = lesson.get("end_time") or lesson.get("end")
+                    start_str = lesson.get("start_time") or lesson.get("start") or lesson.get("start_time_string")
+                    end_str = lesson.get("end_time") or lesson.get("end") or lesson.get("end_time_string")
                     if not start_str or not end_str:
                         continue
-                    start_time = datetime.strptime(start_str[:5], "%H:%M").time()
-                    end_time = datetime.strptime(end_str[:5], "%H:%M").time()
+                    start_time = datetime.strptime(str(start_str)[:5], "%H:%M").time()
+                    end_time = datetime.strptime(str(end_str)[:5], "%H:%M").time()
                     if start_time <= current_time <= end_time:
                         return lesson
                 except (ValueError, TypeError):
                     continue
             return None
+
+        # For next lesson: check remaining lessons today, or fall back to the first available future day
+        sorted_dates = sorted(timetable.keys())
+        _LOGGER.debug("ClassCharts Timetable: Scanning dates: %s", sorted_dates)
+
+        for date_str in sorted_dates:
+            lessons = timetable.get(date_str, [])
+            if not lessons or not isinstance(lessons, list):
+                continue
+
+            for lesson in lessons:
+                try:
+                    start_str = lesson.get("start_time") or lesson.get("start") or lesson.get("start_time_string")
+                    if not start_str:
+                        continue
+
+                    start_time = datetime.strptime(str(start_str)[:5], "%H:%M").time()
+
+                    # If today, look for a lesson that hasn't started yet
+                    if date_str == today_str:
+                        if start_time > current_time:
+                            return lesson
+                    # If a future date, take the first valid lesson
+                    elif date_str > today_str:
+                        return lesson
+                except (ValueError, TypeError) as err:
+                    _LOGGER.debug("ClassCharts Timetable: Error parsing lesson time: %s", err)
+                    continue
+
+        return None
 
         # For next lesson, scan ahead through sorted dates (today, tomorrow, next week, etc.)
         sorted_dates = sorted(timetable.keys())
