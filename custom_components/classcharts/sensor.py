@@ -30,7 +30,7 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
             return 0
         homework = self.coordinator.data.get("homework", {})
         meta = homework.get("meta", {})
-        return meta.get(self._key, 0)  
+        return meta.get(self._key, 0)    
         
     @property
     def extra_state_attributes(self):
@@ -84,6 +84,8 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
             })
 
         return {"homework_list": cleaned_list}
+
+
 class CCLessonSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
@@ -183,6 +185,7 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
             "end_time": target_lesson.get("end_time") or target_lesson.get("end"),
             "subject": target_lesson.get("subject_name") or target_lesson.get("name"),
         }
+
 
 class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
