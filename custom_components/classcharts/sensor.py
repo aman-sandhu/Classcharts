@@ -136,9 +136,12 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
             except (ValueError, TypeError):
                 return None
 
-        # For current lesson, we only care about today
+        # For current lesson, we safely check today's lessons
         if self._lesson_type == "current":
             lessons = timetable.get(today_str, [])
+            if not lessons or not isinstance(lessons, list):
+                return None
+
             for lesson in lessons:
                 start_val = lesson.get("start_time") or lesson.get("start")
                 end_val = lesson.get("end_time") or lesson.get("end")
