@@ -78,7 +78,7 @@ class CCHomeworkSensor(CoordinatorEntity, SensorEntity):
                 "homework_type": item.get("homework_type"),
                 "issue_date": issue_iso,
                 "issue_date_formatted": issue_disp,
-                "due_date": due_iso,               # YYYY-MM-DD for your Jinja math
+                "due_date": due_iso,           # YYYY-MM-DD for your Jinja math
                 "due_date_formatted": due_disp,     # DD/MM/YYYY for display
                 "description_snippet": description_snippet,
             })
@@ -150,8 +150,9 @@ class CCLessonSensor(CoordinatorEntity, SensorEntity):
                     return lesson
             return None
 
-        # For next lesson, scan ahead through sorted dates
-        sorted_dates = sorted(timetable.keys())
+        # For next lesson, scan today's remaining lessons or look ahead to future school days
+        sorted_dates = sorted([d for d in timetable.keys() if d >= today_str])
+        
         for date_str in sorted_dates:
             lessons = timetable.get(date_str, [])
             if not lessons or not isinstance(lessons, list):
