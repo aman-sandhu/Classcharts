@@ -52,11 +52,18 @@ class ClassChartsTimetableCalendar(CoordinatorEntity, CalendarEntity):
 
     @property
     def event(self) -> CalendarEvent | None:
-        """Return the next upcoming lesson."""
+        """Return the next upcoming lesson for today."""
         events = self._get_events()
         now = dt_util.now()
-        upcoming = [e for e in events if e.end > now]
-        return upcoming[0] if upcoming else None
+        today = now.date()
+        
+        # Only look at lessons scheduled for today that haven't finished yet
+        upcoming_today = [
+            e for e in events 
+            if e.start.date() == today and e.end > now
+        ]
+        
+        return upcoming_today[0] if upcoming_today else None
 
     def _get_events(self) -> list[CalendarEvent]:
         """Convert coordinator data to CalendarEvents."""
