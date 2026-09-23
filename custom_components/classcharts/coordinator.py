@@ -192,14 +192,15 @@ class ClassChartsCoordinator(DataUpdateCoordinator):
         self.password = entry.data["password"]
         self.pupil_id = entry.data[CONF_PUPIL_ID]
         
-        refresh_interval = entry.options.get("refresh_interval", 24)
+        # Default to 15 minutes if not set in options
+        refresh_interval = entry.options.get("refresh_interval", 15)
         self.days_to_fetch = entry.options.get(CONF_DAYS_TO_FETCH, 14)
 
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(hours=refresh_interval),
+            update_interval=timedelta(minutes=refresh_interval),
         )
 
     async def _async_update_data(self):
