@@ -5,6 +5,7 @@ import json
 import aiohttp
 import urllib.parse
 import voluptuous as vol
+from yarl import URL
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
@@ -17,6 +18,7 @@ from .const import (
     CONF_DAYS_TO_FETCH,
     CONF_SHOW_NO_SCHOOL
 )
+from .privacy_http import async_classcharts_request, ClassChartsRequestError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the multi-step memory structures."""
         self.login_data = {}
         self.discovered_students = {}
+        self._discovery_error = "invalid_auth"
 
     async def async_step_user(self, user_input=None):
         """Step 1: Capture credentials using your exact imported constants."""
@@ -51,7 +54,7 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 return await self.async_step_select_student()
             else:
-                errors["base"] = "invalid_auth"
+                errors["base"] = self._discovery_error
 
         return self.async_show_form(
             step_id="user",
@@ -76,6 +79,7 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PUPIL_ID: selected_id,
                 "student_name": student_name,
             }
+            self.login_data = {}
 
             return self.async_create_entry(
                 title=f"Class Charts ({student_name})", 
@@ -92,6 +96,7 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _discover_students(self, email, password):
         """Authenticate, extract dynamic V2 credentials, and scan for pupil mappings."""
+        self._discovery_error = "invalid_auth"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
@@ -113,21 +118,24 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         encoded_payload = urllib.parse.urlencode(payload)
 
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(30):
                 async with aiohttp.ClientSession() as session:
                     
                     # Submit credentials form handshake
-                    async with session.post(
-                        NEW_LOGIN_URL, 
+                    async with async_classcharts_request(
+                        session, "POST", NEW_LOGIN_URL,
                         data=encoded_payload, 
-                        headers=headers, 
-                        allow_redirects=True
+                        headers=headers,
                     ) as response:
-                        _LOGGER.info("Login handshake settled with status: %s", response.status)
+                        if response.status == 429 or response.status >= 500:
+                            self._discovery_error = "cannot_connect"
+                            return {}
+                        if response.status >= 400:
+                            return {}
 
                     # Extract session validation token
                     session_id_token = None
-                    cookies = session.cookie_jar.filter_cookies("https://www.classcharts.com")
+                    cookies = session.cookie_jar.filter_cookies(URL("https://www.classcharts.com"))
                     
                     if "parent_session_credentials" in cookies:
                         raw_cookie_val = cookies["parent_session_credentials"].value
@@ -160,12 +168,21 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                     # Route 1: Updated V2 parent ping route
                     v2_ping_url = "https://www.classcharts.com/apiv2parent/ping"
-                    async with session.post(v2_ping_url, data="{}", headers=api_headers) as api_response:
+                    async with async_classcharts_request(session, "POST", v2_ping_url, data="{}", headers=api_headers) as api_response:
+                        if api_response.status in (401, 403):
+                            return {}
+                        if api_response.status == 429 or api_response.status >= 500:
+                            self._discovery_error = "cannot_connect"
+                            return {}
                         if api_response.status == 200:
                             json_data = await api_response.json()
+                            if isinstance(json_data, dict) and json_data.get("success") in (0, "0", False):
+                                return {}
                             
                             # Safely parse data node whether it's a dict or a list
-                            data_node = json_data.get("data", {})
+                            if not isinstance(json_data, (dict, list)):
+                                raise ValueError
+                            data_node = json_data.get("data", {}) if isinstance(json_data, dict) else json_data
                             pupils_list = []
                             
                             if isinstance(data_node, dict):
@@ -173,7 +190,7 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             elif isinstance(data_node, list):
                                 pupils_list = data_node
                                 
-                            if not pupils_list:
+                            if not pupils_list and isinstance(json_data, dict):
                                 pupils_list = json_data.get("pupils", [])
 
                             if pupils_list and isinstance(pupils_list, list):
@@ -186,19 +203,30 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                     # Route 2: Fallback to dedicated explicit pupils list if ping returned nothing
                     if not found_kids:
-                        _LOGGER.info("Ping payload empty or list type. Requesting explicit V2 pupils endpoint...")
                         v2_pupils_url = "https://www.classcharts.com/apiv2parent/pupils"
-                        async with session.post(v2_pupils_url, data="{}", headers=api_headers) as pupils_response:
+                        async with async_classcharts_request(session, "POST", v2_pupils_url, data="{}", headers=api_headers) as pupils_response:
+                            if pupils_response.status != 200:
+                                if pupils_response.status not in (401, 403):
+                                    self._discovery_error = "cannot_connect"
+                                return {}
                             if pupils_response.status == 200:
                                 json_data = await pupils_response.json()
-                                
-                                _LOGGER.error("=== CLASS CHARTS V2 PUPILS SUCCESS ===")
-                                _LOGGER.error(json.dumps(json_data))
-                                
-                                data_node = json_data.get("data", [])
-                                pupils_list = data_node if isinstance(data_node, list) else json_data.get("pupils", [])
-                                if not pupils_list and isinstance(json_data, list):
+                                if isinstance(json_data, dict) and json_data.get("success") in (0, "0", False):
+                                    return {}
+                                if isinstance(json_data, list):
                                     pupils_list = json_data
+                                elif isinstance(json_data, dict):
+                                    data_node = json_data.get("data", [])
+                                    if isinstance(data_node, list):
+                                        pupils_list = data_node
+                                    elif isinstance(data_node, dict):
+                                        pupils_list = data_node.get("pupils", [])
+                                    else:
+                                        pupils_list = []
+                                    if not pupils_list:
+                                        pupils_list = json_data.get("pupils", [])
+                                else:
+                                    raise ValueError
 
                                 if pupils_list and isinstance(pupils_list, list):
                                     for p in pupils_list:
@@ -209,14 +237,20 @@ class ClassChartsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                                 found_kids[p_id] = p_name.strip()
 
                     if found_kids:
-                        _LOGGER.info("Discovered Class Charts children successfully via V2: %s", found_kids)
                         return found_kids
                     
-                    _LOGGER.error("Authenticated successfully, but both V2 endpoints returned empty student profiles.")
+                    self._discovery_error = "unknown"
+                    _LOGGER.error("Class Charts returned no supported student profiles.")
                     return {}
                             
-        except Exception as err:
-            _LOGGER.exception(f"Unexpected crash during child array discovery sequence: {err}")
+        except (aiohttp.ClientError, TimeoutError, ClassChartsRequestError):
+            self._discovery_error = "cannot_connect"
+            _LOGGER.warning("Could not complete a secure connection to Class Charts.")
+            return {}
+        except Exception:
+            self._discovery_error = "unknown"
+            # Exception text/tracebacks may contain responses, URLs or tokens.
+            _LOGGER.error("Class Charts returned an unexpected response during setup.")
             return {}
 
     @staticmethod
@@ -242,11 +276,11 @@ class ClassChartsOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_REFRESH_INTERVAL,
                     default=options.get(CONF_REFRESH_INTERVAL, 60), # Default to 60 minutes
-                ): int,
+                ): vol.All(vol.Coerce(int), vol.Range(min=15, max=1440)),
                 vol.Optional(
                     CONF_DAYS_TO_FETCH,
                     default=options.get(CONF_DAYS_TO_FETCH, 14),
-                ): int,
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
                 vol.Optional(
                     "show_completed_homework",
                     default=options.get("show_completed_homework", True),

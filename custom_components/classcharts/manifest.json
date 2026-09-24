@@ -3,9 +3,9 @@
   "name": "Class Charts",
   "codeowners": ["@skid88"],
   "config_flow": true,
-  "documentation": "https://github.com/skid88/Classcharts/blob/main/README.md",
+  "documentation": "https://github.com/aman-sandhu/Classcharts",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/skid88/Classcharts/issues",
+  "issue_tracker": "https://github.com/aman-sandhu/Classcharts/issues",
   "requirements": [],
-  "version": "v1.2.9"
+  "version": "1.2.9.2"
 }

@@ -16,6 +16,7 @@ from .const import (
     HOMEWORK_URL,
     BEHAVIOUR_URL
 )
+from .privacy_http import classcharts_request
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +37,6 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
     })
     
     try:
-        session.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
         login_payload = {
             "_method": "POST",
             "email": email,
@@ -46,12 +46,14 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
         }
         encoded_login = urllib.parse.urlencode(login_payload)
         
-        login_resp = session.post(
-            LOGIN_URL, 
+        login_resp = classcharts_request(
+            session, "POST", LOGIN_URL,
             data=encoded_login,
-            allow_redirects=True,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=15
         )
+        if login_resp.status_code >= 400:
+            raise UpdateFailed("Class Charts login was unsuccessful.")
 
         # 2. Extract Authenticated V2 Token from Session Cookies
         cookies_dict = session.cookies.get_dict()
@@ -79,11 +81,9 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://www.classcharts.com/mobile/parent"
         })
-        if "Content-Type" in session.headers:
-            del session.headers["Content-Type"]
 
         # 3. Crucial V2 Ping Handshake Initialization
-        ping_resp = session.post(f"{V2_BASE_URL}/ping", data="{}", timeout=10)
+        ping_resp = classcharts_request(session, "POST", f"{V2_BASE_URL}/ping", data="{}", timeout=10)
 
         if ping_resp.status_code != 200:
             raise UpdateFailed(f"V2 backend gatekeeper rejected API initialization footprint. Code: {ping_resp.status_code}")
@@ -91,10 +91,12 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
         # Check if ping returns token errors
         try:
             ping_json = ping_resp.json()
-            if ping_json.get("success") == 0 or ping_json.get("success") is False:
-                raise UpdateFailed(f"V2 API authentication handshake failed: {ping_json.get('error')}")
+            if not isinstance(ping_json, dict):
+                raise ValueError
+            if ping_json.get("success") in (0, "0", False):
+                raise UpdateFailed("Class Charts rejected the session.")
         except ValueError:
-            pass
+            raise UpdateFailed("Class Charts returned an invalid login response.") from None
 
         # 4. Fetch Updated V2 Timetable Data
         full_schedule = {}
@@ -102,7 +104,8 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
             target_date = datetime.date.today() + datetime.timedelta(days=i)
             date_str = target_date.strftime("%Y-%m-%d")
 
-            resp = session.get(
+            resp = classcharts_request(
+                session, "GET",
                 f"{V2_BASE_URL}/timetable/{pupil_id}",
                 params={"date": date_str},
                 timeout=10
@@ -111,18 +114,23 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
             if resp.status_code == 200:
                 try:
                     day_data = resp.json()
-                    lessons = day_data.get("data", []) if isinstance(day_data, dict) else []
-                    full_schedule[date_str] = lessons if isinstance(lessons, list) else []
-                except Exception as parse_err:
-                    _LOGGER.error("Failed parsing V2 timetable for %s: %s", date_str, parse_err)
+                    if not isinstance(day_data, dict) or day_data.get("success") in (0, "0", False):
+                        raise ValueError
+                    lessons = day_data.get("data", [])
+                    if not isinstance(lessons, list):
+                        raise ValueError
+                    full_schedule[date_str] = lessons
+                except Exception:
+                    raise UpdateFailed("Class Charts returned an invalid timetable response.") from None
             else:
-                _LOGGER.error("V2 Timetable query failed for %s. Code: %s", date_str, resp.status_code)
+                raise UpdateFailed("Class Charts could not supply the timetable.")
 
         # 5. Fetch Updated V2 Homework Data
         hw_from = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         hw_to = (datetime.date.today() + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
         
-        hw_resp = session.get(
+        hw_resp = classcharts_request(
+            session, "GET",
             f"{HOMEWORK_URL}/{pupil_id}",
             params={"display_date": "due_date", "from": hw_from, "to": hw_to},
             timeout=10
@@ -135,14 +143,20 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
                 if isinstance(hw_json, list):
                     homework_data = {"data": hw_json, "meta": {}}
                 elif isinstance(hw_json, dict):
+                    if hw_json.get("success") in (0, "0", False):
+                        raise ValueError
                     if "data" in hw_json:
                         homework_data = hw_json
                     else:
                         homework_data = {"data": hw_json.get("homework", hw_json), "meta": hw_json.get("meta", {})}
-            except Exception as parse_err:
-                _LOGGER.error("Failed parsing V2 homework payload structural map: %s", parse_err)
+                else:
+                    raise ValueError
+                if not isinstance(homework_data.get("data"), list) or not isinstance(homework_data.get("meta", {}), dict):
+                    raise ValueError
+            except Exception:
+                raise UpdateFailed("Class Charts returned an invalid homework response.") from None
         else:
-            _LOGGER.error("V2 Homework data retrieval failed with code: %s", hw_resp.status_code)
+            raise UpdateFailed("Class Charts could not supply homework data.")
 
         # Calculate Academic Year Date Boundaries (UK: Sept 1st start)
         now = datetime.date.today()
@@ -151,20 +165,34 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
         acad_end_date = now.strftime("%Y-%m-%d")
 
         # 6. Fetch Updated V2 Behaviour Data scoped to the Academic Year
-        behaviour_resp = session.get(
+        behaviour_resp = classcharts_request(
+            session, "GET",
             f"https://www.classcharts.com/apiv2parent/behaviour/{pupil_id}",
             params={"from": acad_start_date, "to": acad_end_date},
             timeout=10
         )
-        behaviour_data = behaviour_resp.json() if behaviour_resp.status_code == 200 else {}
+        if behaviour_resp.status_code != 200:
+            raise UpdateFailed("Class Charts could not supply behaviour data.")
+        behaviour_data = behaviour_resp.json()
+        if not isinstance(behaviour_data, dict) or behaviour_data.get("success") in (0, "0", False):
+            raise UpdateFailed("Class Charts returned an invalid behaviour response.")
+        if not isinstance(behaviour_data.get("data", {}), dict):
+            raise UpdateFailed("Class Charts returned an invalid behaviour response.")
 
         # 7. Fetch Updated V2 Activity Data (Detailed Logs) scoped to Academic Year as well
-        activity_resp = session.get(
+        activity_resp = classcharts_request(
+            session, "GET",
             f"https://www.classcharts.com/apiv2parent/activity/{pupil_id}",
             params={"from": acad_start_date, "to": acad_end_date},
             timeout=10
         )
-        activity_data = activity_resp.json() if activity_resp.status_code == 200 else {}
+        if activity_resp.status_code != 200:
+            raise UpdateFailed("Class Charts could not supply activity data.")
+        activity_data = activity_resp.json()
+        if not isinstance(activity_data, dict) or activity_data.get("success") in (0, "0", False):
+            raise UpdateFailed("Class Charts returned an invalid activity response.")
+        if not isinstance(activity_data.get("data"), list):
+            raise UpdateFailed("Class Charts returned an invalid activity response.")
 
         # Return standardized dictionary for sensors
         return {
@@ -174,9 +202,12 @@ def sync_get_classcharts_data(email, password, pupil_id, days_to_fetch):
             "activity_data": activity_data     # This is the detailed list JSON
         }
 
-    except Exception as err:
-        _LOGGER.error("Error fetching Class Charts data payload: %s", err)
-        raise UpdateFailed(f"Error communicating with V2 API: {err}")
+    except UpdateFailed as err:
+        # Only our fixed, locally defined messages reach Home Assistant.
+        raise UpdateFailed(str(err)) from None
+    except Exception:
+        # Do not forward raw network/API exceptions to logs or HA diagnostics.
+        raise UpdateFailed("Unable to retrieve Class Charts data securely.") from None
     finally:
         session.close()
 
@@ -192,9 +223,9 @@ class ClassChartsCoordinator(DataUpdateCoordinator):
         self.password = entry.data["password"]
         self.pupil_id = entry.data[CONF_PUPIL_ID]
         
-        # Default to 15 minutes if not set in options
-        refresh_interval = entry.options.get("refresh_interval", 15)
-        self.days_to_fetch = entry.options.get(CONF_DAYS_TO_FETCH, 14)
+        # Bound polling and lookahead even for entries created by older versions.
+        refresh_interval = max(15, min(1440, int(entry.options.get("refresh_interval", 60))))
+        self.days_to_fetch = max(1, min(30, int(entry.options.get(CONF_DAYS_TO_FETCH, 14))))
 
         super().__init__(
             hass,
