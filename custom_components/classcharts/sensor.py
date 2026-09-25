@@ -279,7 +279,7 @@ class CCTimetableSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         student_label = entry.data.get("student_name") or entry.data.get("pupil_id")
-        self._attr_name = "Today Timetable"
+        self._attr_name = "Timetable"
         self._attr_unique_id = f"{entry.entry_id}_timetable_today"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
@@ -287,47 +287,73 @@ class CCTimetableSensor(CoordinatorEntity, SensorEntity):
         }
         self._attr_icon = "mdi:timetable"
 
-    def _today_lessons(self):
-        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
-            return []
-        timetable = self.coordinator.data.get("timetable", {})
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        lessons = timetable.get(today_str, [])
-        if not isinstance(lessons, list):
-            return []
+    def _hhmm(self, v):
+        if not v:
+            return None
+        s = str(v)
+        try:
+            if "T" in s:
+                return datetime.fromisoformat(s).strftime("%H:%M")
+            if " " in s:
+                s = s.split(" ")[-1]
+            return datetime.strptime(s[:5], "%H:%M").strftime("%H:%M")
+        except (ValueError, TypeError):
+            return None
 
-        def hhmm(v):
-            if not v:
-                return None
-            s = str(v)
-            try:
-                if "T" in s:
-                    return datetime.fromisoformat(s).strftime("%H:%M")
-                if " " in s:
-                    s = s.split(" ")[-1]
-                return datetime.strptime(s[:5], "%H:%M").strftime("%H:%M")
-            except (ValueError, TypeError):
-                return None
-
+    def _day_lessons(self, lessons):
         out = []
-        for l in lessons:
-            out.append({
-                "subject": l.get("subject_name") or l.get("name") or l.get("lesson_name") or "Lesson",
-                "teacher": l.get("teacher_name") or l.get("teacher"),
-                "room": l.get("room_name") or l.get("room"),
-                "start": hhmm(l.get("start_time") or l.get("start")),
-                "end": hhmm(l.get("end_time") or l.get("end")),
-            })
+        if isinstance(lessons, list):
+            for l in lessons:
+                out.append({
+                    "subject": l.get("subject_name") or l.get("name") or l.get("lesson_name") or "Lesson",
+                    "teacher": l.get("teacher_name") or l.get("teacher"),
+                    "room": l.get("room_name") or l.get("room"),
+                    "start": self._hhmm(l.get("start_time") or l.get("start")),
+                    "end": self._hhmm(l.get("end_time") or l.get("end")),
+                })
         out.sort(key=lambda x: x["start"] or "")
         return out
 
+    def _all_days(self):
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
+            return []
+        tt = self.coordinator.data.get("timetable", {})
+        if not isinstance(tt, dict):
+            return []
+        today = datetime.now().strftime("%Y-%m-%d")
+        days = []
+        for date_str in sorted(tt.keys()):
+            if date_str < today:
+                continue
+            lessons = self._day_lessons(tt.get(date_str, []))
+            if not lessons:
+                continue
+            try:
+                label = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %-d %b")
+            except ValueError:
+                label = date_str
+            days.append({
+                "date": date_str,
+                "label": label,
+                "is_today": date_str == today,
+                "lessons": lessons,
+            })
+        return days
+
     @property
     def native_value(self):
-        return len(self._today_lessons())
+        today = datetime.now().strftime("%Y-%m-%d")
+        for d in self._all_days():
+            if d["date"] == today:
+                return len(d["lessons"])
+        return 0
 
     @property
     def extra_state_attributes(self):
-        return {"lessons": self._today_lessons()}
+        days = self._all_days()
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_lessons = next((d["lessons"] for d in days if d["date"] == today), [])
+        return {"today": today_lessons, "days": days}
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up Class Charts sensors cleanly using the unified CC class."""
