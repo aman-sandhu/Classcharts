@@ -273,6 +273,62 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         }
 
 
+class CCTimetableSensor(CoordinatorEntity, SensorEntity):
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator)
+        student_label = entry.data.get("student_name") or entry.data.get("pupil_id")
+        self._attr_name = "Today Timetable"
+        self._attr_unique_id = f"{entry.entry_id}_timetable_today"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": f"Class Charts ({student_label})",
+        }
+        self._attr_icon = "mdi:timetable"
+
+    def _today_lessons(self):
+        if not self.coordinator.data or not isinstance(self.coordinator.data, dict):
+            return []
+        timetable = self.coordinator.data.get("timetable", {})
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        lessons = timetable.get(today_str, [])
+        if not isinstance(lessons, list):
+            return []
+
+        def hhmm(v):
+            if not v:
+                return None
+            s = str(v)
+            try:
+                if "T" in s:
+                    return datetime.fromisoformat(s).strftime("%H:%M")
+                if " " in s:
+                    s = s.split(" ")[-1]
+                return datetime.strptime(s[:5], "%H:%M").strftime("%H:%M")
+            except (ValueError, TypeError):
+                return None
+
+        out = []
+        for l in lessons:
+            out.append({
+                "subject": l.get("subject_name") or l.get("name") or l.get("lesson_name") or "Lesson",
+                "teacher": l.get("teacher_name") or l.get("teacher"),
+                "room": l.get("room_name") or l.get("room"),
+                "start": hhmm(l.get("start_time") or l.get("start")),
+                "end": hhmm(l.get("end_time") or l.get("end")),
+            })
+        out.sort(key=lambda x: x["start"] or "")
+        return out
+
+    @property
+    def native_value(self):
+        return len(self._today_lessons())
+
+    @property
+    def extra_state_attributes(self):
+        return {"lessons": self._today_lessons()}
+
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up Class Charts sensors cleanly using the unified CC class."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
@@ -286,4 +342,5 @@ async def async_setup_entry(hass, entry, async_add_entities):
         CCBehaviourSensor(coordinator, entry, "Behaviour Balance", "balance"),
         CCBehaviourSensor(coordinator, entry, "Behaviour Positive", "positive"),
         CCBehaviourSensor(coordinator, entry, "Behaviour Negative", "negative"),
+        CCTimetableSensor(coordinator, entry),
     ], update_before_add=True)
