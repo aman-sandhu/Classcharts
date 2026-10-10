@@ -240,7 +240,10 @@ class CCBehaviourSensor(CoordinatorEntity, SensorEntity):
         total_neg = sum(item.get("negative", 0) for item in timeline)
         
         if self._sensor_type == "balance":
-            return (total_pos - total_neg)
+            # Net score = positives minus the magnitude of negatives. Class Charts
+            # signs negatives as negative numbers, so subtract abs() rather than the
+            # raw value (which would double-negate and inflate the balance).
+            return (total_pos - abs(total_neg))
         elif self._sensor_type == "positive":
             return total_pos
         elif self._sensor_type == "negative":
