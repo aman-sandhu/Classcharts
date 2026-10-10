@@ -1,11 +1,11 @@
 {
   "domain": "classcharts",
   "name": "Class Charts",
-  "codeowners": ["@skid88"],
+  "codeowners": ["@skid88", "@aman-sandhu"],
   "config_flow": true,
   "documentation": "https://github.com/aman-sandhu/Classcharts",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/aman-sandhu/Classcharts/issues",
   "requirements": [],
-  "version": "1.2.9.2"
+  "version": "1.2.9.3"
 }
